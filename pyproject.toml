@@ -1,0 +1,40 @@
+[project]
+name = "nonebot-plugin-class-schedule"
+version = "1.0.0"
+description = "功能完善的 NoneBot2 课程表插件"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "INKT-love", email = "inkt@example.com"}
+]
+keywords = ["nonebot", "nonebot2", "class", "schedule", "course"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "nonebot2>=2.0.0",
+    "nonebot-adapter-onebot>=2.0.0",
+]
+
+[project.optional-dependencies]
+image = ["nonebot-plugin-htmlrender>=0.2.0"]
+reminder = ["nonebot-plugin-apscheduler>=0.2.0"]
+all = [
+    "nonebot-plugin-htmlrender>=0.2.0",
+    "nonebot-plugin-apscheduler>=0.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/INKT-love/nonebot-plugin-class-schedule"
+Repository = "https://github.com/INKT-love/nonebot-plugin-class-schedule"
+Issues = "https://github.com/INKT-love/nonebot-plugin-class-schedule/issues"
+
+[tool.nonebot]
+plugins = ["nonebot_plugin_class_schedule"]
