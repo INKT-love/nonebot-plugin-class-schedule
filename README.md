@@ -75,8 +75,6 @@ CLASS_SCHEDULE_DATA_DIR=/path/to/class_schedule_data
 - `schedules/{qq_user_id}.json`：用户课程表
 - `preferences.json`：输出风格、提醒设置、作息表等用户偏好
 
-请不要把这些运行数据提交到 GitHub 或上传到 PyPI。
-
 ## 配置项
 
 | 配置名 | 类型 | 默认值 | 说明 |
@@ -164,20 +162,6 @@ CLASS_SCHEDULE_DATA_DIR=/path/to/class_schedule_data
 ```
 
 提醒功能依赖 `nonebot-plugin-apscheduler`。如果没有安装，查询和导入功能仍可正常使用。
-
-## 隐私与发布注意事项
-
-本仓库不包含任何真实课表数据、QQ 号、Token、Cookie、数据库或 `.env` 文件。
-
-发布前建议检查：
-
-```bash
-python -m build
-tar -tf dist/*.tar.gz
-python -m twine check dist/*
-```
-
-确认构建产物里没有 `data/`、`*.json`、`.env`、数据库文件或真实用户信息后再上传。
 
 ## License
 
