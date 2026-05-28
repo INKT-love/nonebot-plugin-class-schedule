@@ -3,7 +3,7 @@
 一个功能完善的 NoneBot2 课程表插件
 """
 
-from nonebot import on_command
+from nonebot import on_command, on_startswith
 from nonebot.adapters.onebot.v11 import Bot, MessageEvent, Message, MessageSegment
 from nonebot.log import logger
 from nonebot.params import CommandArg
@@ -93,7 +93,7 @@ HELP_TEXT = """\
 
 【课表导入】
   /导入课表        导入课表
-  /确认导入        确认导入课表
+  /确认导入        确认导入课表（也可发 /确定导入）
   /取消导入        取消导入
 
 【作息表导入】
@@ -172,10 +172,10 @@ holiday_reminder_cmd = on_command("假期订阅", priority=5)
 holiday_cmd = on_command("放假没", aliases={"节假日", "今天放假吗"}, priority=5)
 import_cmd = on_command("导入课表", aliases={"导入", "设置课表"}, priority=5)
 cancel_import_cmd = on_command("取消导入", priority=5)
-confirm_import_cmd = on_command("确认导入", priority=5)
+confirm_import_cmd = on_command("确认导入", aliases={"确定导入"}, priority=5)
 import_schedule_cmd = on_command("导入作息表", aliases={"作息表导入", "导入作息"}, priority=5)
 cancel_schedule_cmd = on_command("取消导入作息", priority=5)
-confirm_schedule_cmd = on_command("确认导入作息", priority=5)
+confirm_schedule_cmd = on_command("确认导入作息", aliases={"确定导入作息"}, priority=5)
 now_cmd = on_command("现在什么课", aliases={"正在上什么课"}, priority=5)
 next_cmd = on_command("等会什么课", aliases={"下一节什么课"}, priority=5)
 search_cmd = on_command("查课", priority=5)
@@ -250,6 +250,111 @@ async def handle_cancel_import(bot: Bot, event: MessageEvent):
         await bot.send(event, "已取消导入")
     except Exception as e:
         logger.error(f"/取消导入 error: {e}")
+
+
+# 接收课表文本（当用户处于 waiting 模式时，匹配以星期关键字开头的消息）
+_import_text_matcher = on_startswith(("周一", "周二", "周三", "周四", "周五", "周六", "周日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日", "早读", "第1节", "第2节"), priority=6)
+
+@_import_text_matcher.handle()
+async def handle_import_text(bot: Bot, event: MessageEvent):
+    """接收用户发送的课表文本。"""
+    try:
+        user_id = str(event.user_id)
+
+        # 只处理处于 waiting 模式的用户
+        if user_id not in _import_mode or _import_mode[user_id].get("mode") != "waiting":
+            return
+
+        text = event.get_plaintext().strip()
+
+        if not text:
+            return
+
+        # 尝试解析
+        courses, errors = parse_schedule_text(text)
+        if not courses:
+            await bot.send(event, f"无法识别课表内容，请检查格式\n{IMPORT_COMMAND_GUIDE}")
+            return
+
+        # 进入确认模式
+        _import_mode[user_id] = {
+            "mode": "confirm",
+            "courses": courses,
+            "text": text,
+        }
+
+        preview = format_schedule_for_review(courses)
+        warnings = validate_schedule(courses)
+        warning_text = ""
+        if warnings:
+            warning_text = "\n\n提示:\n" + "\n".join(f"• {w}" for w in warnings)
+
+        await bot.send(
+            event,
+            f"{preview}{warning_text}\n\n"
+            f"共识别 {len(courses)} 门课\n"
+            "确认导入？回复 /确认导入 保存\n"
+            "回复 /取消导入 取消"
+        )
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"导入课表文本处理 error: {e}")
+        await bot.send(event, f"处理失败: {e}")
+
+
+# 接收作息表文本（匹配以时间或节次关键字开头的消息）
+_import_schedule_text_matcher = on_startswith(("早读", "第1节", "第2节", "第3节", "第4节", "第5节", "第6节", "第7节", "第8节", "晚自习", "午休", "0", "1", "2", "3", "4", "5", "6", "7"), priority=6)
+
+@_import_schedule_text_matcher.handle()
+async def handle_import_schedule_text(bot: Bot, event: MessageEvent):
+    """接收用户发送的作息表文本。"""
+    try:
+        user_id = str(event.user_id)
+
+        # 只处理处于 waiting 模式的用户
+        if user_id not in _import_schedule_mode or _import_schedule_mode[user_id].get("mode") != "waiting":
+            return
+
+        text = event.get_plaintext().strip()
+
+        if not text:
+            return
+
+        # 尝试解析
+        schedule, errors = parse_time_schedule(text)
+        if not schedule:
+            await bot.send(event, f"无法识别作息表内容，请检查格式\n{SCHEDULE_IMPORT_GUIDE}")
+            return
+
+        # 进入确认模式
+        _import_schedule_mode[user_id] = {
+            "mode": "confirm",
+            "schedule": schedule,
+            "text": text,
+        }
+
+        preview = format_time_schedule_for_review(schedule)
+        warnings = validate_time_schedule(schedule)
+        warning_text = ""
+        if warnings:
+            warning_text = "\n\n提示:\n" + "\n".join(f"• {w}" for w in warnings)
+
+        await bot.send(
+            event,
+            f"{preview}{warning_text}\n\n"
+            f"共识别 {len(schedule)} 个时间段\n"
+            "确认导入？回复 /确认导入作息 保存\n"
+            "回复 /取消导入作息 取消"
+        )
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"导入作息表文本处理 error: {e}")
+        await bot.send(event, f"处理失败: {e}")
+
 
 
 @confirm_import_cmd.handle()
@@ -575,21 +680,37 @@ async def handle_now(bot: Bot, event: MessageEvent):
             await bot.send(event, f"今天是{name}，放假！")
             return
 
+        if day_index >= 6:
+            await bot.send(event, "今天是周末，没有课哦~")
+            return
+
         week_info = calculate_week_info(
             schedule["semester_start"], today, schedule.get("total_weeks", 20)
         )
 
         courses = manager.get_courses_for_day(user_id, day_index, week_info["current"])
 
-        if not courses:
-            await bot.send(event, "今天没有课程安排~")
-            return
+        # 获取作息表
+        prefs = manager._prefs_cache.get(user_id, {})
+        custom_schedule = prefs.get("custom_schedule", [])
+        time_schedule = [(s["period"], s["start"], s["end"]) for s in custom_schedule] if custom_schedule else []
 
-        now_str = today.strftime("%Y-%m-%d")
-        text, html = format_now_output(
-            courses, day_index, week_info["current"], week_info["is_odd"], now_str
-        )
-        await _send_output(bot, event, user_id, text, html)
+        period_info = get_current_period(schedule=time_schedule)
+        current_course = None
+        next_course = None
+
+        if period_info and courses:
+            current_period = period_info.get("period")
+            next_period = period_info.get("next_period")
+            for c in courses:
+                periods = c.get("periods", [])
+                if current_period is not None and current_period in periods:
+                    current_course = c
+                if next_period is not None and next_period in periods:
+                    next_course = c
+
+        text = format_now_output(period_info, current_course, next_course)
+        await bot.send(event, text)
 
     except FinishedException:
         raise
@@ -618,21 +739,37 @@ async def handle_next(bot: Bot, event: MessageEvent):
             await bot.send(event, f"今天是{name}，放假！")
             return
 
+        if day_index >= 6:
+            await bot.send(event, "今天是周末，没有课哦~")
+            return
+
         week_info = calculate_week_info(
             schedule["semester_start"], today, schedule.get("total_weeks", 20)
         )
 
         courses = manager.get_courses_for_day(user_id, day_index, week_info["current"])
 
-        if not courses:
-            await bot.send(event, "今天没有课程安排~")
-            return
+        # 获取作息表
+        prefs = manager._prefs_cache.get(user_id, {})
+        custom_schedule = prefs.get("custom_schedule", [])
+        time_schedule = [(s["period"], s["start"], s["end"]) for s in custom_schedule] if custom_schedule else []
 
-        now_str = today.strftime("%Y-%m-%d")
-        text, html = format_next_output(
-            courses, day_index, week_info["current"], week_info["is_odd"], now_str
-        )
-        await _send_output(bot, event, user_id, text, html)
+        period_info = get_current_period(schedule=time_schedule)
+        current_course = None
+        next_course = None
+
+        if period_info and courses:
+            current_period = period_info.get("period")
+            next_period = period_info.get("next_period")
+            for c in courses:
+                periods = c.get("periods", [])
+                if current_period is not None and current_period in periods:
+                    current_course = c
+                if next_period is not None and next_period in periods:
+                    next_course = c
+
+        text = format_next_output(period_info, next_course, current_course)
+        await bot.send(event, text)
 
     except FinishedException:
         raise
@@ -671,11 +808,8 @@ async def handle_today(bot: Bot, event: MessageEvent):
             await bot.send(event, "今天没有课程安排~")
             return
 
-        now_str = today.strftime("%Y-%m-%d")
-        text, html = format_day_output(
-            courses, day_index, week_info["current"], week_info["is_odd"], now_str
-        )
-        await _send_output(bot, event, user_id, text, html)
+        text = format_day_output(today, day_index, week_info, courses)
+        await bot.send(event, text)
 
     except FinishedException:
         raise
@@ -714,11 +848,8 @@ async def handle_tomorrow(bot: Bot, event: MessageEvent):
             await bot.send(event, "明天没有课程安排~")
             return
 
-        now_str = tomorrow.strftime("%Y-%m-%d")
-        text, html = format_day_output(
-            courses, day_index, week_info["current"], week_info["is_odd"], now_str
-        )
-        await _send_output(bot, event, user_id, text, html)
+        text = format_day_output(tomorrow, day_index, week_info, courses)
+        await bot.send(event, text)
 
     except FinishedException:
         raise
@@ -744,10 +875,13 @@ async def handle_week(bot: Bot, event: MessageEvent):
             schedule["semester_start"], today, schedule.get("total_weeks", 20)
         )
 
-        text, html = format_weekly_overview(
-            schedule, user_id, week_info["current"], week_info["is_odd"]
-        )
-        await _send_output(bot, event, user_id, text, html)
+        # 收集每天的课表
+        days_data = {}
+        for day in range(1, 6):
+            days_data[day] = manager.get_courses_for_day(user_id, day, week_info["current"])
+
+        text = format_weekly_overview(week_info, days_data, today)
+        await bot.send(event, text)
 
     except FinishedException:
         raise
@@ -805,10 +939,8 @@ async def handle_my_schedule(bot: Bot, event: MessageEvent):
             schedule["semester_start"], today, schedule.get("total_weeks", 20)
         )
 
-        text, html = format_my_schedule(
-            schedule, week_info["current"], week_info["is_odd"]
-        )
-        await _send_output(bot, event, user_id, text, html)
+        text = format_my_schedule(schedule)
+        await bot.send(event, text)
 
     except FinishedException:
         raise
@@ -955,11 +1087,8 @@ async def _handle_weekday(bot: Bot, event: MessageEvent, day_index: int):
             await bot.send(event, f"{WEEKDAY_FULL[day_index]}没有课程安排~")
             return
 
-        now_str = target_date.strftime("%Y-%m-%d")
-        text, html = format_day_output(
-            courses, day_index, week_info["current"], week_info["is_odd"], now_str
-        )
-        await _send_output(bot, event, user_id, text, html)
+        text = format_day_output(target_date, day_index, week_info, courses)
+        await bot.send(event, text)
 
     except FinishedException:
         raise
