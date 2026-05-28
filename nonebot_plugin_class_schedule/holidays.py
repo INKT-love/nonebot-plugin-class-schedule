@@ -1,202 +1,188 @@
-"""节假日数据模块"""
+"""nonebot-plugin-class-schedule - 节假日/调休识别模块
 
-from datetime import date, datetime, timedelta
-from typing import Optional, Tuple
+内置 2026-2027 年中国法定节假日及调休安排。
+数据来源: 国务院办公厅关于2026年部分节假日安排的通知
+"""
 
-# 2026-2027年法定节假日数据 (示例数据)
+from datetime import date, timedelta
+
+# ===== 2026年节假日（已确认）=====
+# 来源: 国务院办公厅《关于2026年部分节假日安排的通知》(2025年11月4日发布)
+
 HOLIDAYS_2026 = {
-    # 元旦
-    "2026-01-01": "元旦",
-    "2026-01-02": "元旦",
-    "2026-01-03": "元旦",
+    # 元旦: 1月1日(周四)至3日(周六)放假调休，共3天
+    date(2026, 1, 1): "元旦",
+    date(2026, 1, 2): "元旦",
+    date(2026, 1, 3): "元旦",
     
-    # 春节
-    "2026-02-17": "春节",
-    "2026-02-18": "春节",
-    "2026-02-19": "春节",
-    "2026-02-20": "春节",
-    "2026-02-21": "春节",
-    "2026-02-22": "春节",
-    "2026-02-23": "春节",
+    # 春节: 2月15日(周日，腊月二十八)至23日(周一，正月初七)放假调休，共9天
+    date(2026, 2, 15): "春节",
+    date(2026, 2, 16): "春节",
+    date(2026, 2, 17): "春节",
+    date(2026, 2, 18): "春节",
+    date(2026, 2, 19): "春节",
+    date(2026, 2, 20): "春节",
+    date(2026, 2, 21): "春节",
+    date(2026, 2, 22): "春节",
+    date(2026, 2, 23): "春节",
     
-    # 清明节
-    "2026-04-04": "清明节",
-    "2026-04-05": "清明节",
-    "2026-04-06": "清明节",
+    # 清明节: 4月4日(周六)至6日(周一)放假，共3天，不调休
+    date(2026, 4, 4): "清明节",
+    date(2026, 4, 5): "清明节",
+    date(2026, 4, 6): "清明节",
     
-    # 劳动节
-    "2026-05-01": "劳动节",
-    "2026-05-02": "劳动节",
-    "2026-05-03": "劳动节",
-    "2026-05-04": "劳动节",
-    "2026-05-05": "劳动节",
+    # 劳动节: 5月1日(周五)至5日(周二)放假调休，共5天
+    date(2026, 5, 1): "劳动节",
+    date(2026, 5, 2): "劳动节",
+    date(2026, 5, 3): "劳动节",
+    date(2026, 5, 4): "劳动节",
+    date(2026, 5, 5): "劳动节",
     
-    # 端午节
-    "2026-06-19": "端午节",
-    "2026-06-20": "端午节",
-    "2026-06-21": "端午节",
+    # 端午节: 6月19日(周五)至21日(周日)放假，共3天，不调休
+    date(2026, 6, 19): "端午节",
+    date(2026, 6, 20): "端午节",
+    date(2026, 6, 21): "端午节",
     
-    # 中秋节
-    "2026-09-25": "中秋节",
-    "2026-09-26": "中秋节",
-    "2026-09-27": "中秋节",
+    # 中秋节: 9月25日(周五)至27日(周日)放假，共3天，不调休
+    date(2026, 9, 25): "中秋节",
+    date(2026, 9, 26): "中秋节",
+    date(2026, 9, 27): "中秋节",
     
-    # 国庆节
-    "2026-10-01": "国庆节",
-    "2026-10-02": "国庆节",
-    "2026-10-03": "国庆节",
-    "2026-10-04": "国庆节",
-    "2026-10-05": "国庆节",
-    "2026-10-06": "国庆节",
-    "2026-10-07": "国庆节",
-    "2026-10-08": "国庆节",
+    # 国庆节: 10月1日(周四)至7日(周三)放假调休，共7天
+    date(2026, 10, 1): "国庆节",
+    date(2026, 10, 2): "国庆节",
+    date(2026, 10, 3): "国庆节",
+    date(2026, 10, 4): "国庆节",
+    date(2026, 10, 5): "国庆节",
+    date(2026, 10, 6): "国庆节",
+    date(2026, 10, 7): "国庆节",
 }
 
-# 调休工作日 (周末需要上班)
+# 2026年调休上班日（周末补班）
 WORKDAYS_2026 = {
-    "2026-02-14": "春节调休",
-    "2026-02-15": "春节调休",
-    "2026-04-11": "清明调休",
-    "2026-04-12": "清明调休",
-    "2026-04-25": "劳动节调休",
-    "2026-05-09": "劳动节调休",
-    "2026-06-13": "端午调休",
-    "2026-06-14": "端午调休",
-    "2026-09-19": "中秋调休",
-    "2026-09-20": "中秋调休",
-    "2026-09-26": "国庆调休",
-    "2026-10-10": "国庆调休",
+    date(2026, 1, 4): "元旦调休",     # 周日上班
+    date(2026, 2, 14): "春节调休",    # 周六上班
+    date(2026, 2, 28): "春节调休",    # 周六上班
+    date(2026, 5, 9): "劳动节调休",   # 周六上班
+    date(2026, 9, 20): "国庆节调休",  # 周日上班
+    date(2026, 10, 10): "国庆节调休", # 周六上班
 }
 
+# ===== 2027年节假日（预估，待官方通知后更新）=====
+# 2027年春节: 2月6日(农历正月初一)
 
-def is_holiday(target_date: date = None) -> bool:
-    """检查指定日期是否为节假日
+HOLIDAYS_2027 = {
+    # 元旦: 预估1月1日-3日
+    date(2027, 1, 1): "元旦",
+    date(2027, 1, 2): "元旦",
+    date(2027, 1, 3): "元旦",
     
-    Args:
-        target_date: 目标日期，默认为今天
+    # 春节: 预估2月5日(除夕)-13日(初七)
+    date(2027, 2, 5): "春节",
+    date(2027, 2, 6): "春节",
+    date(2027, 2, 7): "春节",
+    date(2027, 2, 8): "春节",
+    date(2027, 2, 9): "春节",
+    date(2027, 2, 10): "春节",
+    date(2027, 2, 11): "春节",
+    date(2027, 2, 12): "春节",
+    date(2027, 2, 13): "春节",
     
-    Returns:
-        是否为节假日
-    """
-    if target_date is None:
-        target_date = date.today()
+    # 清明节: 4月3日-5日
+    date(2027, 4, 3): "清明节",
+    date(2027, 4, 4): "清明节",
+    date(2027, 4, 5): "清明节",
     
-    date_str = target_date.strftime("%Y-%m-%d")
+    # 劳动节: 5月1日-5日
+    date(2027, 5, 1): "劳动节",
+    date(2027, 5, 2): "劳动节",
+    date(2027, 5, 3): "劳动节",
+    date(2027, 5, 4): "劳动节",
+    date(2027, 5, 5): "劳动节",
     
-    # 检查是否在节假日列表
-    if date_str in HOLIDAYS_2026:
+    # 端午节: 6月9日-11日
+    date(2027, 6, 9): "端午节",
+    date(2027, 6, 10): "端午节",
+    date(2027, 6, 11): "端午节",
+    
+    # 中秋节: 9月14日-16日
+    date(2027, 9, 14): "中秋节",
+    date(2027, 9, 15): "中秋节",
+    date(2027, 9, 16): "中秋节",
+    
+    # 国庆节: 10月1日-7日
+    date(2027, 10, 1): "国庆节",
+    date(2027, 10, 2): "国庆节",
+    date(2027, 10, 3): "国庆节",
+    date(2027, 10, 4): "国庆节",
+    date(2027, 10, 5): "国庆节",
+    date(2027, 10, 6): "国庆节",
+    date(2027, 10, 7): "国庆节",
+}
+
+# 2027年调休上班日（预估）
+WORKDAYS_2027 = {
+    date(2027, 1, 2): "元旦调休",     # 周六上班
+    date(2027, 2, 6): "春节调休",     # 周六上班
+    date(2027, 2, 20): "春节调休",    # 周六上班
+    date(2027, 5, 8): "劳动节调休",   # 周六上班
+    date(2027, 9, 19): "国庆节调休",  # 周日上班
+    date(2027, 10, 9): "国庆节调休",  # 周六上班
+}
+
+# 合并所有数据
+ALL_HOLIDAYS = {**HOLIDAYS_2026, **HOLIDAYS_2027}
+ALL_WORKDAYS = {**WORKDAYS_2026, **WORKDAYS_2027}
+
+
+def is_holiday(d: date) -> bool:
+    """判断某天是否是法定节假日。"""
+    return d in ALL_HOLIDAYS
+
+
+def is_workday(d: date) -> bool:
+    """判断某天是否是工作日（含调休补班）。"""
+    # 调休补班日算工作日
+    if d in ALL_WORKDAYS:
         return True
-    
-    # 检查是否为调休工作日
-    if date_str in WORKDAYS_2026:
+    # 法定节假日不算工作日
+    if d in ALL_HOLIDAYS:
         return False
-    
-    # 检查是否为周末
-    weekday = target_date.weekday()
-    if weekday >= 5:  # 周六或周日
-        return True
-    
-    return False
+    # 周末不算工作日
+    if d.weekday() >= 5:
+        return False
+    return True
 
 
-def get_holiday_name(target_date: date = None) -> Optional[str]:
-    """获取指定日期的节假日名称
-    
-    Args:
-        target_date: 目标日期，默认为今天
-    
-    Returns:
-        节假日名称，如果不是节假日则返回 None
-    """
-    if target_date is None:
-        target_date = date.today()
-    
-    date_str = target_date.strftime("%Y-%m-%d")
-    
-    # 检查是否在节假日列表
-    if date_str in HOLIDAYS_2026:
-        return HOLIDAYS_2026[date_str]
-    
-    # 检查是否为周末
-    weekday = target_date.weekday()
-    if weekday >= 5:
-        return "周末"
-    
-    return None
+def get_holiday_name(d: date) -> str:
+    """获取节假日名称，如果不是节假日返回 None。"""
+    return ALL_HOLIDAYS.get(d)
 
 
-def get_workday_reason(target_date: date = None) -> Optional[str]:
-    """获取调休工作日的说明
-    
-    Args:
-        target_date: 目标日期，默认为今天
-    
-    Returns:
-        调休说明，如果不是调休工作日则返回 None
-    """
-    if target_date is None:
-        target_date = date.today()
-    
-    date_str = target_date.strftime("%Y-%m-%d")
-    return WORKDAYS_2026.get(date_str)
+def get_workday_reason(d: date) -> str:
+    """获取调休补班原因，如果不是调休日返回 None。"""
+    return ALL_WORKDAYS.get(d)
 
 
-def get_next_holiday(target_date: date = None) -> Optional[Tuple[date, str, int]]:
-    """获取下一个节假日
+def get_next_holiday(d: date = None) -> dict:
+    """获取下一个节假日信息。"""
+    if d is None:
+        d = date.today()
     
-    Args:
-        target_date: 目标日期，默认为今天
+    future_holidays = [
+        (dt, name) for dt, name in ALL_HOLIDAYS.items() if dt > d
+    ]
     
-    Returns:
-        (节假日日期, 节假日名称, 距离天数) 元组，如果没有则返回 None
-    """
-    if target_date is None:
-        target_date = date.today()
+    if not future_holidays:
+        return None
     
-    # 遍历节假日列表，找到最近的未来节假日
-    for date_str, name in sorted(HOLIDAYS_2026.items()):
-        holiday_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        if holiday_date > target_date:
-            days_left = (holiday_date - target_date).days
-            return (holiday_date, name, days_left)
+    future_holidays.sort(key=lambda x: x[0])
+    dt, name = future_holidays[0]
+    days_left = (dt - d).days
     
-    return None
-
-
-def get_holiday_status(target_date: date = None) -> str:
-    """获取指定日期的节假日状态描述
-    
-    Args:
-        target_date: 目标日期，默认为今天
-    
-    Returns:
-        状态描述字符串
-    """
-    if target_date is None:
-        target_date = date.today()
-    
-    date_str = target_date.strftime("%Y-%m-%d")
-    weekday = target_date.weekday()
-    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-    
-    # 检查是否在节假日列表
-    if date_str in HOLIDAYS_2026:
-        holiday_name = HOLIDAYS_2026[date_str]
-        return f"今天是{holiday_name}假期 ({weekday_names[weekday]})"
-    
-    # 检查是否为调休工作日
-    if date_str in WORKDAYS_2026:
-        reason = WORKDAYS_2026[date_str]
-        return f"今天是调休工作日 ({reason})"
-    
-    # 检查是否为周末
-    if weekday >= 5:
-        return f"今天是周末 ({weekday_names[weekday]})"
-    
-    # 工作日
-    next_holiday = get_next_holiday(target_date)
-    if next_holiday:
-        holiday_date, name, days_left = next_holiday
-        return f"今天是工作日 ({weekday_names[weekday]})\n距离{name}还有 {days_left} 天"
-    
-    return f"今天是工作日 ({weekday_names[weekday]})"
+    return {
+        "date": dt,
+        "name": name,
+        "days_left": days_left,
+        "weekday": dt.strftime("%A"),
+    }

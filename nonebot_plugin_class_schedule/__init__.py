@@ -67,3 +67,906 @@ __plugin_meta__ = PluginMetadata(
 
 # 初始化管理器
 manager = ScheduleManager()
+
+# ===== 帮助文本 =====
+
+HELP_TEXT = """\
+课程表插件 帮助
+
+【实时查询】
+  /现在什么课    当前节次课程（上课中/课间/放学）
+  /等会什么课    下一节课程及倒计时
+
+【每日查询】
+  /今天什么课    今日课程 (别名: /课表)
+  /明天什么课    明日课程
+  /周一 ~ /周五  直接查询某天课程
+
+【设置】
+  /课表风格 文字  切换为文字输出
+  /课表风格 图片  切换为图片输出
+  /课前提醒 开    开启课前提醒（私聊通知）
+  /课前提醒 关    关闭提醒
+  /课前提醒 提前5分钟  设置提前时间
+  /假期订阅 开    开启假期提醒（提前5天）
+  /假期订阅 关    关闭假期提醒
+
+【课表导入】
+  /导入课表        导入课表
+  /确认导入        确认导入课表
+  /取消导入        取消导入
+
+【作息表导入】
+  /导入作息表      导入作息表
+  /确认导入作息    确认导入作息表
+  /取消导入作息    取消导入作息
+
+【其他】
+  /放假没  查询今天是否放假/下一个假期
+  /查课 <课目>   搜索某门课今天在第几节
+
+【汇总查询】
+  /本周课表      本周一到周五概览
+  /第几周        当前第几周及单双周
+  /我的课表      查看完整课表
+
+发送 /课程表帮助 或 /class help 查看本帮助"""
+
+
+# ===== 辅助函数 =====
+
+def _load_schedule(user_id: str) -> tuple:
+    """加载用户课表，返回 (schedule, error_msg)。"""
+    schedule = manager.get_schedule(user_id)
+    if schedule is None:
+        return None, (
+            "你还没有课表哦~\n\n"
+            "导入方式:\n"
+            "  1. 按以下格式发送课表给管理员（或直接发给本机器人）:\n\n"
+            "  周一：\n"
+            "  早读 物理（钱晓晶）\n"
+            "  第1节 生物(张建坤)\n"
+            "  ...\n"
+            "  周二：\n"
+            "  ...\n\n"
+            "  2. 管理员会帮你导入，导入后即可使用所有查询命令\n\n"
+            "  发送 /课程表帮助 查看所有可用命令"
+        )
+    if not isinstance(schedule, dict):
+        return None, "课表数据异常，请联系管理员检查。"
+    if "semester_start" not in schedule:
+        return None, "课表缺少学期起始日期 (semester_start)，请联系管理员完善。"
+    return schedule, None
+
+
+async def _send_output(bot: Bot, event: MessageEvent, user_id: str, text: str, html: str = None):
+    """根据用户偏好发送文字或图片输出。"""
+    style = manager.get_user_style(user_id)
+    
+    if style == "image" and HAS_HTMLRENDER and html:
+        try:
+            pic = await html_to_pic(
+                html=html,
+                viewport={"width": 800, "height": 10},
+                device_scale_factor=2.0,
+            )
+            await bot.send(event, MessageSegment.image(pic))
+            return
+        except Exception as e:
+            logger.warning(f"图片渲染失败，回退到文字: {e}")
+    
+    await bot.send(event, text)
+
+
+# 导入模式状态
+_import_mode: dict = {}
+_import_schedule_mode: dict = {}
+
+
+# ===== 命令注册 =====
+
+help_cmd = on_command("课程表帮助", aliases={"class help"}, priority=5)
+style_cmd = on_command("课表风格", priority=5)
+reminder_cmd = on_command("课前提醒", priority=5)
+holiday_reminder_cmd = on_command("假期订阅", priority=5)
+holiday_cmd = on_command("放假没", aliases={"节假日", "今天放假吗"}, priority=5)
+import_cmd = on_command("导入课表", aliases={"导入", "设置课表"}, priority=5)
+cancel_import_cmd = on_command("取消导入", priority=5)
+confirm_import_cmd = on_command("确认导入", priority=5)
+import_schedule_cmd = on_command("导入作息表", aliases={"作息表导入", "导入作息"}, priority=5)
+cancel_schedule_cmd = on_command("取消导入作息", priority=5)
+confirm_schedule_cmd = on_command("确认导入作息", priority=5)
+now_cmd = on_command("现在什么课", aliases={"正在上什么课"}, priority=5)
+next_cmd = on_command("等会什么课", aliases={"下一节什么课"}, priority=5)
+search_cmd = on_command("查课", priority=5)
+today_cmd = on_command("今天什么课", aliases={"课表"}, priority=5)
+tomorrow_cmd = on_command("明天什么课", priority=5)
+week_cmd = on_command("本周课表", priority=5)
+weeknum_cmd = on_command("第几周", priority=5)
+my_schedule_cmd = on_command("我的课表", priority=5)
+
+# 支持多种格式: /周几 周一, /周一, /星期一, /周一课表
+monday_cmd = on_command("周一", aliases={"星期一", "周一课表", "星期一课表"}, priority=5)
+tuesday_cmd = on_command("周二", aliases={"星期二", "周二课表", "星期二课表"}, priority=5)
+wednesday_cmd = on_command("周三", aliases={"星期三", "周三课表", "星期三课表"}, priority=5)
+thursday_cmd = on_command("周四", aliases={"星期四", "周四课表", "星期四课表"}, priority=5)
+friday_cmd = on_command("周五", aliases={"星期五", "周五课表", "星期五课表"}, priority=5)
+saturday_cmd = on_command("周六", aliases={"星期六", "周六课表", "星期六课表"}, priority=5)
+sunday_cmd = on_command("周日", aliases={"星期日", "周末", "周日课表", "星期日课表"}, priority=5)
+
+
+# ===== 导入课表命令 =====
+
+@import_cmd.handle()
+async def handle_import(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    """引导用户导入课表。"""
+    try:
+        user_id = str(event.user_id)
+        arg = args.extract_plain_text().strip()
+        
+        if arg:
+            courses, errors = parse_schedule_text(arg)
+            if not courses:
+                await bot.send(event, f"无法识别课表内容\n{IMPORT_COMMAND_GUIDE}")
+                return
+            
+            _import_mode[user_id] = {
+                "mode": "confirm",
+                "courses": courses,
+                "text": arg,
+            }
+            
+            preview = format_schedule_for_review(courses)
+            warnings = validate_schedule(courses)
+            warning_text = ""
+            if warnings:
+                warning_text = "\n\n提示:\n" + "\n".join(f"• {w}" for w in warnings)
+            
+            await bot.send(
+                event,
+                f"{preview}{warning_text}\n\n"
+                f"共识别 {len(courses)} 门课\n"
+                "确认导入？回复 /确认导入 保存\n"
+                "回复 /取消导入 取消"
+            )
+        else:
+            _import_mode[user_id] = {"mode": "waiting"}
+            await bot.send(event, IMPORT_COMMAND_GUIDE)
+            
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/导入课表 error: {e}")
+        await bot.send(event, f"操作失败: {e}")
+
+
+@cancel_import_cmd.handle()
+async def handle_cancel_import(bot: Bot, event: MessageEvent):
+    """取消导入。"""
+    try:
+        user_id = str(event.user_id)
+        if user_id in _import_mode:
+            del _import_mode[user_id]
+        await bot.send(event, "已取消导入")
+    except Exception as e:
+        logger.error(f"/取消导入 error: {e}")
+
+
+@confirm_import_cmd.handle()
+async def handle_confirm_import(bot: Bot, event: MessageEvent):
+    """确认导入课表。"""
+    try:
+        user_id = str(event.user_id)
+        
+        if user_id not in _import_mode:
+            await bot.send(event, "没有待确认的导入，请先 /导入课表")
+            return
+        
+        data = _import_mode[user_id]
+        if data.get("mode") != "confirm":
+            await bot.send(event, "没有待确认的导入，请先 /导入课表")
+            return
+        
+        courses = data["courses"]
+        
+        today = date.today()
+        schedule = {
+            "semester_start": today.strftime("%Y-%m-%d"),
+            "total_weeks": 20,
+            "courses": courses,
+        }
+        
+        manager.save_schedule(user_id, schedule)
+        
+        course_count = len(courses)
+        
+        # 检查是否导入了作息表
+        prefs = manager._prefs_cache.get(user_id, {})
+        has_schedule = "custom_schedule" in prefs and prefs["custom_schedule"]
+        
+        del _import_mode[user_id]
+        
+        if has_schedule:
+            await bot.send(event, f"课表导入成功！共 {course_count} 门课\n\n发送 /我的课表 查看完整课表")
+        else:
+            await bot.send(event, f"课表导入成功！共 {course_count} 门课\n\n建议发送 /导入作息表 导入作息表，这样 /现在什么课 和 /等会什么课 才能正常工作")
+        
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/确认导入 error: {e}")
+        await bot.send(event, f"导入失败: {e}")
+
+
+# ===== 导入作息表命令 =====
+
+@import_schedule_cmd.handle()
+async def handle_import_schedule(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    """引导用户导入作息表。"""
+    try:
+        user_id = str(event.user_id)
+        arg = args.extract_plain_text().strip()
+        
+        if arg:
+            schedule, errors = parse_time_schedule(arg)
+            if not schedule:
+                await bot.send(event, f"无法识别作息表内容\n{SCHEDULE_IMPORT_GUIDE}")
+                return
+            
+            _import_schedule_mode[user_id] = {
+                "mode": "confirm",
+                "schedule": schedule,
+                "text": arg,
+            }
+            
+            preview = format_time_schedule_for_review(schedule)
+            warnings = validate_time_schedule(schedule)
+            warning_text = ""
+            if warnings:
+                warning_text = "\n\n提示:\n" + "\n".join(f"• {w}" for w in warnings)
+            
+            await bot.send(
+                event,
+                f"{preview}{warning_text}\n\n"
+                f"共识别 {len(schedule)} 个时间段\n"
+                "确认导入？回复 /确认导入作息 保存\n"
+                "回复 /取消导入作息 取消"
+            )
+        else:
+            _import_schedule_mode[user_id] = {"mode": "waiting"}
+            await bot.send(event, SCHEDULE_IMPORT_GUIDE)
+            
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/导入作息表 error: {e}")
+        await bot.send(event, f"操作失败: {e}")
+
+
+@cancel_schedule_cmd.handle()
+async def handle_cancel_schedule_import(bot: Bot, event: MessageEvent):
+    """取消导入作息表。"""
+    try:
+        user_id = str(event.user_id)
+        if user_id in _import_schedule_mode:
+            del _import_schedule_mode[user_id]
+        await bot.send(event, "已取消导入作息表")
+    except Exception as e:
+        logger.error(f"/取消导入作息 error: {e}")
+
+
+@confirm_schedule_cmd.handle()
+async def handle_confirm_schedule_import(bot: Bot, event: MessageEvent):
+    """确认导入作息表。"""
+    try:
+        user_id = str(event.user_id)
+        
+        if user_id not in _import_schedule_mode:
+            await bot.send(event, "没有待确认的导入，请先 /导入作息表")
+            return
+        
+        data = _import_schedule_mode[user_id]
+        if data.get("mode") != "confirm":
+            await bot.send(event, "没有待确认的导入，请先 /导入作息表")
+            return
+        
+        schedule = data["schedule"]
+        time_schedule = schedule_to_dict(schedule)
+        
+        if user_id not in manager._prefs_cache:
+            manager._prefs_cache[user_id] = {}
+        manager._prefs_cache[user_id]["custom_schedule"] = time_schedule
+        manager._save_preferences()
+        
+        del _import_schedule_mode[user_id]
+        
+        period_count = len(schedule)
+        
+        # 检查是否导入了课表
+        has_courses = manager.get_schedule(user_id) is not None
+        
+        if has_courses:
+            await bot.send(event, f"作息表导入成功！共 {period_count} 个时间段\n\n现在 /现在什么课 和 /等会什么课 可以正常工作了")
+        else:
+            await bot.send(event, f"作息表导入成功！共 {period_count} 个时间段\n\n建议发送 /导入课表 导入课程表，这样就可以使用 /现在什么课 等查询功能了")
+        
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/确认导入作息 error: {e}")
+        await bot.send(event, f"导入失败: {e}")
+
+
+# ===== 帮助命令 =====
+
+@help_cmd.handle()
+async def handle_help(bot: Bot, event: MessageEvent):
+    """显示帮助信息。"""
+    await bot.send(event, HELP_TEXT)
+
+
+# ===== 课表风格命令 =====
+
+@style_cmd.handle()
+async def handle_style(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    """设置输出风格。"""
+    try:
+        user_id = str(event.user_id)
+        arg = args.extract_plain_text().strip().lower()
+        
+        if arg in ("文字", "text"):
+            manager.set_user_style(user_id, "text")
+            await bot.send(event, "已切换为文字输出模式")
+        elif arg in ("图片", "image"):
+            manager.set_user_style(user_id, "image")
+            await bot.send(event, "已切换为图片输出模式")
+        else:
+            current = manager.get_user_style(user_id)
+            await bot.send(
+                event,
+                f"当前输出风格: {current}\n\n"
+                "使用方法:\n"
+                "  /课表风格 文字  切换为文字输出\n"
+                "  /课表风格 图片  切换为图片输出"
+            )
+    except Exception as e:
+        logger.error(f"/课表风格 error: {e}")
+        await bot.send(event, f"设置失败: {e}")
+
+
+# ===== 课前提醒命令 =====
+
+@reminder_cmd.handle()
+async def handle_reminder(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    """管理课前提醒。"""
+    try:
+        from .reminder import set_reminder, get_reminder, get_reminder_minutes, set_reminder_minutes
+        
+        user_id = str(event.user_id)
+        arg = args.extract_plain_text().strip().lower()
+
+        if arg in ("开", "开启", "on", "打开"):
+            set_reminder(user_id, True)
+            minutes = get_reminder_minutes(user_id)
+            await bot.send(event, f"已开启课前提醒（提前{minutes}分钟）\n提醒将以私聊方式发送")
+        elif arg in ("关", "关闭", "off"):
+            set_reminder(user_id, False)
+            await bot.send(event, "已关闭课前提醒")
+        elif arg.startswith(("提前", "分钟")):
+            import re
+            m = re.search(r'(\d+)', arg)
+            if m:
+                minutes = int(m.group(1))
+                if minutes < 1 or minutes > 30:
+                    await bot.send(event, "提醒时间范围为 1-30 分钟")
+                    return
+                set_reminder_minutes(user_id, minutes)
+                set_reminder(user_id, True)
+                await bot.send(event, f"已设置提前{minutes}分钟提醒")
+            else:
+                await bot.send(event, "请输入分钟数，例如:\n  /课前提醒 提前5分钟\n  /课前提醒 10")
+        else:
+            enabled = get_reminder(user_id)
+            minutes = get_reminder_minutes(user_id)
+            status = "已开启" if enabled else "已关闭"
+            await bot.send(
+                event,
+                f"课前提醒: {status}\n"
+                f"提前时间: {minutes}分钟\n\n"
+                "使用方法:\n"
+                "  /课前提醒 开    开启提醒\n"
+                "  /课前提醒 关    关闭提醒\n"
+                "  /课前提醒 提前5分钟  设置提前时间"
+            )
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/课前提醒 error: {e}")
+        await bot.send(event, f"操作失败: {e}")
+
+
+# ===== 假期订阅命令 =====
+
+@holiday_reminder_cmd.handle()
+async def handle_holiday_reminder(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    """管理假期订阅提醒。"""
+    try:
+        from .reminder import set_holiday_reminder, get_holiday_reminder
+        
+        user_id = str(event.user_id)
+        arg = args.extract_plain_text().strip().lower()
+
+        if arg in ("开", "开启", "on", "打开"):
+            set_holiday_reminder(user_id, True)
+            await bot.send(event, "已开启假期订阅\n假期前5天每天早上8点会发送提醒")
+        elif arg in ("关", "关闭", "off"):
+            set_holiday_reminder(user_id, False)
+            await bot.send(event, "已关闭假期订阅")
+        else:
+            enabled = get_holiday_reminder(user_id)
+            status = "已开启" if enabled else "已关闭"
+            await bot.send(
+                event,
+                f"假期订阅: {status}\n\n"
+                "使用方法:\n"
+                "  /假期订阅 开    开启假期提醒\n"
+                "  /假期订阅 关    关闭假期提醒\n\n"
+                "开启后，每个假期前5天内每天早上8点会发送提醒"
+            )
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/假期订阅 error: {e}")
+        await bot.send(event, f"操作失败: {e}")
+
+
+# ===== 节假日命令 =====
+
+@holiday_cmd.handle()
+async def handle_holiday(bot: Bot, event: MessageEvent):
+    """查询今天/最近的节假日信息。"""
+    try:
+        today = date.today()
+
+        if is_holiday(today):
+            name = get_holiday_name(today)
+            await bot.send(event, f"今天是{name}，放假！")
+            return
+
+        reason = get_workday_reason(today)
+        if reason:
+            await bot.send(event, f"今天是{reason}补班日，要上课！")
+            return
+
+        next_h = get_next_holiday(today)
+        if next_h:
+            await bot.send(
+                event,
+                f"今天正常上课\n"
+                f"下一个假期: {next_h['name']}（{next_h['date'].strftime('%m月%d日')}）\n"
+                f"还有 {next_h['days_left']} 天"
+            )
+        else:
+            await bot.send(event, "今天正常上课")
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/放假没 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 现在什么课命令 =====
+
+@now_cmd.handle()
+async def handle_now(bot: Bot, event: MessageEvent):
+    """查询当前课程。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        today = date.today()
+        day_index = today.isoweekday()
+
+        if is_holiday(today):
+            name = get_holiday_name(today)
+            await bot.send(event, f"今天是{name}，放假！")
+            return
+
+        week_info = calculate_week_info(
+            schedule["semester_start"], today, schedule.get("total_weeks", 20)
+        )
+
+        courses = manager.get_courses_for_day(user_id, day_index, week_info["current"])
+
+        if not courses:
+            await bot.send(event, "今天没有课程安排~")
+            return
+
+        now_str = today.strftime("%Y-%m-%d")
+        text, html = format_now_output(
+            courses, day_index, week_info["current"], week_info["is_odd"], now_str
+        )
+        await _send_output(bot, event, user_id, text, html)
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/现在什么课 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 等会什么课命令 =====
+
+@next_cmd.handle()
+async def handle_next(bot: Bot, event: MessageEvent):
+    """查询下一节课。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        today = date.today()
+        day_index = today.isoweekday()
+
+        if is_holiday(today):
+            name = get_holiday_name(today)
+            await bot.send(event, f"今天是{name}，放假！")
+            return
+
+        week_info = calculate_week_info(
+            schedule["semester_start"], today, schedule.get("total_weeks", 20)
+        )
+
+        courses = manager.get_courses_for_day(user_id, day_index, week_info["current"])
+
+        if not courses:
+            await bot.send(event, "今天没有课程安排~")
+            return
+
+        now_str = today.strftime("%Y-%m-%d")
+        text, html = format_next_output(
+            courses, day_index, week_info["current"], week_info["is_odd"], now_str
+        )
+        await _send_output(bot, event, user_id, text, html)
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/等会什么课 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 今天什么课命令 =====
+
+@today_cmd.handle()
+async def handle_today(bot: Bot, event: MessageEvent):
+    """查询今日课程。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        today = date.today()
+        day_index = today.isoweekday()
+
+        if is_holiday(today):
+            name = get_holiday_name(today)
+            await bot.send(event, f"今天是{name}，放假！")
+            return
+
+        week_info = calculate_week_info(
+            schedule["semester_start"], today, schedule.get("total_weeks", 20)
+        )
+
+        courses = manager.get_courses_for_day(user_id, day_index, week_info["current"])
+
+        if not courses:
+            await bot.send(event, "今天没有课程安排~")
+            return
+
+        now_str = today.strftime("%Y-%m-%d")
+        text, html = format_day_output(
+            courses, day_index, week_info["current"], week_info["is_odd"], now_str
+        )
+        await _send_output(bot, event, user_id, text, html)
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/今天什么课 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 明天什么课命令 =====
+
+@tomorrow_cmd.handle()
+async def handle_tomorrow(bot: Bot, event: MessageEvent):
+    """查询明日课程。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        tomorrow = date.today() + timedelta(days=1)
+        day_index = tomorrow.isoweekday()
+
+        if is_holiday(tomorrow):
+            name = get_holiday_name(tomorrow)
+            await bot.send(event, f"明天是{name}，放假！")
+            return
+
+        week_info = calculate_week_info(
+            schedule["semester_start"], tomorrow, schedule.get("total_weeks", 20)
+        )
+
+        courses = manager.get_courses_for_day(user_id, day_index, week_info["current"])
+
+        if not courses:
+            await bot.send(event, "明天没有课程安排~")
+            return
+
+        now_str = tomorrow.strftime("%Y-%m-%d")
+        text, html = format_day_output(
+            courses, day_index, week_info["current"], week_info["is_odd"], now_str
+        )
+        await _send_output(bot, event, user_id, text, html)
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/明天什么课 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 本周课表命令 =====
+
+@week_cmd.handle()
+async def handle_week(bot: Bot, event: MessageEvent):
+    """查询本周课表概览。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        today = date.today()
+        week_info = calculate_week_info(
+            schedule["semester_start"], today, schedule.get("total_weeks", 20)
+        )
+
+        text, html = format_weekly_overview(
+            schedule, user_id, week_info["current"], week_info["is_odd"]
+        )
+        await _send_output(bot, event, user_id, text, html)
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/本周课表 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 第几周命令 =====
+
+@weeknum_cmd.handle()
+async def handle_weeknum(bot: Bot, event: MessageEvent):
+    """查询当前是第几周。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        today = date.today()
+        week_info = calculate_week_info(
+            schedule["semester_start"], today, schedule.get("total_weeks", 20)
+        )
+
+        week_type = "单周" if week_info["is_odd"] else "双周"
+        await bot.send(
+            event,
+            f"今天是 {today.strftime('%Y年%m月%d日')}\n"
+            f"当前是第 {week_info['current']} 周 ({week_type})\n"
+            f"本学期共 {week_info['total']} 周"
+        )
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/第几周 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 我的课表命令 =====
+
+@my_schedule_cmd.handle()
+async def handle_my_schedule(bot: Bot, event: MessageEvent):
+    """查询完整课表。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        today = date.today()
+        week_info = calculate_week_info(
+            schedule["semester_start"], today, schedule.get("total_weeks", 20)
+        )
+
+        text, html = format_my_schedule(
+            schedule, week_info["current"], week_info["is_odd"]
+        )
+        await _send_output(bot, event, user_id, text, html)
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/我的课表 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 查课命令 =====
+
+@search_cmd.handle()
+async def handle_search(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    """搜索课程。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        query = args.extract_plain_text().strip()
+        if not query:
+            await bot.send(event, "请输入要搜索的课程名，例如：\n  /查课 物理")
+            return
+
+        today = date.today()
+        day_index = today.isoweekday()
+
+        if is_holiday(today):
+            name = get_holiday_name(today)
+            await bot.send(event, f"今天是{name}，放假！")
+            return
+
+        week_info = calculate_week_info(
+            schedule["semester_start"], today, schedule.get("total_weeks", 20)
+        )
+
+        courses = manager.get_courses_for_day(user_id, day_index, week_info["current"])
+
+        if not courses:
+            await bot.send(event, "今天没有课程安排~")
+            return
+
+        # 搜索匹配的课程
+        matches = []
+        for c in courses:
+            if query.lower() in c.get("name", "").lower():
+                matches.append(c)
+
+        if not matches:
+            await bot.send(event, f"今天没有找到包含「{query}」的课程")
+            return
+
+        # 格式化输出
+        lines = [f"今天包含「{query}」的课程：", ""]
+        for c in matches:
+            periods = c.get("periods", [])
+            p = periods[0] if periods else 0
+            p_name = ["早读","第1节","第2节","第3节","第4节","第5节","第6节","第7节","第8节","晚自习"][p]
+            
+            name = c.get("name", "")
+            teacher = c.get("teacher", "")
+            location = c.get("location", "")
+            
+            info = name
+            if teacher:
+                info += f" ({teacher})"
+            if location:
+                info += f" @{location}"
+            
+            lines.append(f"  {p_name} {info}")
+
+        await bot.send(event, "\n".join(lines))
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/查课 error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# ===== 星期命令 =====
+
+@monday_cmd.handle()
+async def handle_monday(bot: Bot, event: MessageEvent):
+    """查询周一课程。"""
+    await _handle_weekday(bot, event, 1)
+
+@tuesday_cmd.handle()
+async def handle_tuesday(bot: Bot, event: MessageEvent):
+    """查询周二课程。"""
+    await _handle_weekday(bot, event, 2)
+
+@wednesday_cmd.handle()
+async def handle_wednesday(bot: Bot, event: MessageEvent):
+    """查询周三课程。"""
+    await _handle_weekday(bot, event, 3)
+
+@thursday_cmd.handle()
+async def handle_thursday(bot: Bot, event: MessageEvent):
+    """查询周四课程。"""
+    await _handle_weekday(bot, event, 4)
+
+@friday_cmd.handle()
+async def handle_friday(bot: Bot, event: MessageEvent):
+    """查询周五课程。"""
+    await _handle_weekday(bot, event, 5)
+
+@saturday_cmd.handle()
+async def handle_saturday(bot: Bot, event: MessageEvent):
+    """查询周六课程。"""
+    await _handle_weekday(bot, event, 6)
+
+@sunday_cmd.handle()
+async def handle_sunday(bot: Bot, event: MessageEvent):
+    """查询周日课程。"""
+    await _handle_weekday(bot, event, 7)
+
+
+async def _handle_weekday(bot: Bot, event: MessageEvent, day_index: int):
+    """处理星期查询。"""
+    try:
+        user_id = str(event.user_id)
+        schedule, error = _load_schedule(user_id)
+        if error:
+            await bot.send(event, error)
+            return
+
+        today = date.today()
+        target_date = today + timedelta(days=(day_index - today.isoweekday()))
+
+        if is_holiday(target_date):
+            name = get_holiday_name(target_date)
+            await bot.send(event, f"{WEEKDAY_FULL[day_index]}是{name}，放假！")
+            return
+
+        week_info = calculate_week_info(
+            schedule["semester_start"], target_date, schedule.get("total_weeks", 20)
+        )
+
+        courses = manager.get_courses_for_day(user_id, day_index, week_info["current"])
+
+        if not courses:
+            await bot.send(event, f"{WEEKDAY_FULL[day_index]}没有课程安排~")
+            return
+
+        now_str = target_date.strftime("%Y-%m-%d")
+        text, html = format_day_output(
+            courses, day_index, week_info["current"], week_info["is_odd"], now_str
+        )
+        await _send_output(bot, event, user_id, text, html)
+
+    except FinishedException:
+        raise
+    except Exception as e:
+        logger.error(f"/{WEEKDAY_NAMES[day_index]} error: {e}")
+        await bot.send(event, f"查询失败: {e}")
+
+
+# 导入提醒模块
+from . import reminder

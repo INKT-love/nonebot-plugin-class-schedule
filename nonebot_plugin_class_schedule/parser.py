@@ -1,16 +1,250 @@
-"""课表解析模块"""
+"""nonebot-plugin-class-schedule - 课表解析器
+
+支持多种格式的课表文本导入：
+- 格式1: 每行一门课
+  周一：
+  早读 物理（钱晓晶）
+  第1节 生物(张建坤)
+  第2节 数学 @A201
+  第3节 英语（王老师）
+  晚自习 数学
+  
+- 格式2: 紧凑格式（用空格分隔）
+  周一：早读 物理 第1节 生物 第2节 数学
+
+支持识别：课程名、老师、地点
+"""
 
 import re
-from typing import List, Dict, Tuple
+from datetime import date
+from typing import List, Dict, Optional, Tuple
 
-# 导入课表命令指南
-IMPORT_COMMAND_GUIDE = """\
-请发送课表内容，格式如下:
+# 星期映射
+DAY_PATTERNS = {
+    1: ["周一", "星期一", "周一：", "星期一：", "周一 ", "星期一 "],
+    2: ["周二", "星期二", "周二：", "星期二：", "周二 ", "星期二 "],
+    3: ["周三", "星期三", "周三：", "星期三：", "周三 ", "星期三 "],
+    4: ["周四", "星期四", "周四：", "星期四：", "周四 ", "星期四 "],
+    5: ["周五", "星期五", "周五：", "星期五：", "周五 ", "星期五 "],
+    6: ["周六", "星期六", "周六：", "星期六：", "周六 ", "星期六 "],
+    7: ["周日", "星期日", "周日：", "星期日：", "周日 ", "星期日 "],
+}
+
+# 节次映射
+PERIOD_PATTERNS = {
+    0: ["早读", "早读", "早读"],
+    1: ["第1节", "第1节课", "1节", "第一节", "第1节"],
+    2: ["第2节", "第2节课", "2节", "第二节", "第2节"],
+    3: ["第3节", "第3节课", "3节", "第三节", "第3节"],
+    4: ["第4节", "第4节课", "4节", "第四节", "第4节"],
+    5: ["第5节", "第5节课", "5节", "第五节", "第5节"],
+    6: ["第6节", "第6节课", "6节", "第六节", "第6节"],
+    7: ["第7节", "第7节课", "7节", "第七节", "第7节"],
+    8: ["第8节", "第8节课", "8节", "第八节", "第8节"],
+    9: ["晚自习", "晚自习", "晚上"],
+}
+
+
+def parse_period(text: str) -> Optional[int]:
+    """识别节次，返回节次数（0=早读, 1-8=第1-8节, 9=晚自习），None表示未识别。"""
+    text = text.strip()
+    for period, patterns in PERIOD_PATTERNS.items():
+        for p in patterns:
+            if p in text:
+                return period
+    return None
+
+
+def parse_day(text: str) -> Optional[int]:
+    """识别星期几，返回1-7，None表示未识别。"""
+    text = text.strip().rstrip("：:").strip()
+    for day, patterns in DAY_PATTERNS.items():
+        for p in patterns:
+            if text == p or text.startswith(p):
+                return day
+    return None
+
+
+def parse_course_line(line: str) -> Optional[Dict]:
+    """解析一行课程信息。"""
+    line = line.strip()
+    if not line:
+        return None
+    
+    # 跳过星期标题和空行
+    if parse_day(line) is not None:
+        return None
+    if not line or line.startswith("#"):
+        return None
+    
+    # 识别节次
+    period = parse_period(line)
+    if period is None:
+        return None
+    
+    # 提取课程名、老师、地点
+    course_info = line
+    
+    # 移除节次前缀
+    for patterns in PERIOD_PATTERNS.values():
+        for p in patterns:
+            if p in course_info:
+                course_info = course_info.replace(p, "").strip()
+                break
+    
+    # 解析 (老师) 或（老师）
+    teacher = ""
+    m = re.search(r"[（(]([^）)]+)[）)]", course_info)
+    if m:
+        teacher = m.group(1).strip()
+        course_info = re.sub(r"[（(][^）)]+[）)]", "", course_info).strip()
+    
+    # 解析 @地点 或 #地点
+    location = ""
+    m = re.search(r"[@#]([^@\s#]+)", course_info)
+    if m:
+        location = m.group(1).strip()
+        course_info = re.sub(r"[@#][^@\s#]+", "", course_info).strip()
+    
+    course_name = course_info.strip()
+    
+    if not course_name:
+        return None
+    
+    return {
+        "name": course_name,
+        "periods": [period],
+        "teacher": teacher,
+        "location": location,
+    }
+
+
+def parse_schedule_text(text: str) -> Tuple[List[Dict], List[str]]:
+    """解析课表文本，返回 (课程列表, 错误列表)。"""
+    lines = text.split("\n")
+    courses = []
+    errors = []
+    current_day = None
+    
+    for i, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
+        
+        # 识别星期
+        day = parse_day(line)
+        if day is not None:
+            current_day = day
+            # 检查是否是纯星期标题（如"周一："）
+            remaining = line
+            for p in DAY_PATTERNS[day]:
+                remaining = remaining.replace(p, "")
+            remaining = remaining.strip("：:")
+            if not remaining:
+                continue
+            # 如果有内容，继续解析
+            line = remaining
+        
+        # 如果没有指定星期，跳过
+        if current_day is None:
+            continue
+        
+        # 解析课程
+        course = parse_course_line(line)
+        if course:
+            course["day"] = current_day
+            courses.append(course)
+        elif parse_period(line) is not None:
+            # 识别到节次但无法解析
+            errors.append(f"第{i}行无法解析: {line}")
+    
+    return courses, errors
+
+
+def validate_schedule(courses: List[Dict]) -> List[str]:
+    """验证课表，返回警告列表。"""
+    warnings = []
+    
+    # 检查是否有课程
+    if not courses:
+        warnings.append("没有识别到任何课程")
+        return warnings
+    
+    # 检查每天是否有课
+    days_with_courses = set(c.get("day") for c in courses)
+    for day in range(1, 6):
+        if day not in days_with_courses:
+            warnings.append(f"周一到周五中，{['一','二','三','四','五'][day-1]}没有课程")
+    
+    # 检查重复课程
+    for day in range(1, 8):
+        day_courses = [c for c in courses if c.get("day") == day]
+        period_counts = {}
+        for c in day_courses:
+            for p in c.get("periods", []):
+                period_counts[p] = period_counts.get(p, 0) + 1
+        
+        for p, count in period_counts.items():
+            if count > 1:
+                p_name = ["早读","第1节","第2节","第3节","第4节","第5节","第6节","第7节","第8节","晚自习"][p]
+                warnings.append(f"周{['一','二','三','四','五','六','日'][day-1]} {p_name} 有{count}门课（请确认是否正确）")
+    
+    return warnings
+
+
+def format_schedule_for_review(courses: List[Dict]) -> str:
+    """格式化课表用于预览。"""
+    if not courses:
+        return "未识别到课程"
+    
+    # 按星期分组
+    days = {i: [] for i in range(1, 8)}
+    for c in courses:
+        day = c.get("day", 1)
+        days[day].append(c)
+    
+    lines = ["课表预览：", ""]
+    day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    
+    for day in range(1, 8):
+        if not days[day]:
+            continue
+        lines.append(f"【{day_names[day]}】")
+        
+        # 按节次排序
+        sorted_courses = sorted(days[day], key=lambda c: min(c.get("periods", [99])))
+        
+        for c in sorted_courses:
+            periods = c.get("periods", [])
+            p = periods[0] if periods else 0
+            p_name = ["早读","第1节","第2节","第3节","第4节","第5节","第6节","第7节","第8节","晚自习"][p]
+            
+            name = c.get("name", "")
+            teacher = c.get("teacher", "")
+            location = c.get("location", "")
+            
+            info = name
+            if teacher:
+                info += f" ({teacher})"
+            if location:
+                info += f" @{location}"
+            
+            lines.append(f"  {p_name} {info}")
+        
+        lines.append("")
+    
+    return "\n".join(lines)
+
+
+# ===== 导入格式示例 =====
+
+IMPORT_FORMAT = """
+课表导入格式示例：
 
 周一：
 早读 英语（李老师）
 第1节 数学 @A201
-第2节 物理(王老师)
+第2节 物理(王老师) @B302
 第3节 化学
 晚自习 语文
 
@@ -20,187 +254,28 @@ IMPORT_COMMAND_GUIDE = """\
 ...
 
 支持格式：
-- 星期：周一/星期一/周一：
-- 节次：早读/第1节/第一节/1节/晚自习
-- 老师：(老师名) 或（老师名）
-- 地点：@地点 或 #地点
+• 早读/第1-8节/晚自习 + 课程名
+• 课程后可跟 (老师) 或 @地点
+• 星期支持：周一/星期一/周一：
+• 节次支持：第1节/第一节/1节
 
-发送 /取消导入 取消操作"""
-
-IMPORT_FORMAT = """\
-示例格式：
-周一：
-早读 物理（钱老师）
-第1节 生物(张老师)
-第2节 化学 @B305
-
-周二：
-...
+直接发送课表内容即可导入~
 """
 
-# 星期映射
-DAY_MAP = {
-    "周一": 0, "星期一": 0, "1": 0, "一": 0,
-    "周二": 1, "星期二": 1, "2": 1, "二": 1,
-    "周三": 2, "星期三": 2, "3": 2, "三": 2,
-    "周四": 3, "星期四": 3, "4": 3, "四": 3,
-    "周五": 4, "星期五": 4, "5": 4, "五": 4,
-    "周六": 5, "星期六": 5, "6": 5, "六": 5,
-    "周日": 6, "星期日": 6, "星期天": 6, "7": 6, "日": 6,
-}
 
-# 节次映射
-PERIOD_MAP = {
-    "早读": 0, "早自习": 0,
-    "第1节": 1, "第一节": 1, "1节": 1,
-    "第2节": 2, "第二节": 2, "2节": 2,
-    "第3节": 3, "第三节": 3, "3节": 3,
-    "第4节": 4, "第四节": 4, "4节": 4,
-    "第5节": 5, "第五节": 5, "5节": 5,
-    "第6节": 6, "第六节": 6, "6节": 6,
-    "第7节": 7, "第七节": 7, "7节": 7,
-    "第8节": 8, "第八节": 8, "8节": 8,
-    "第9节": 9, "第九节": 9, "9节": 9,
-    "晚自习": 10, "晚修": 10,
-}
+IMPORT_COMMAND_GUIDE = """
+请按以下格式发送课表：
 
+周一：
+早读 英语（李老师）
+第1节 数学 @A201
+第2节 物理(王老师)
+...
 
-def parse_schedule_text(text: str) -> Tuple[List[dict], List[str]]:
-    """解析课表文本
-    
-    Returns:
-        (课程列表, 错误信息列表)
-    """
-    courses = []
-    errors = []
-    
-    lines = text.strip().split("\n")
-    current_day = None
-    
-    for line_num, line in enumerate(lines, 1):
-        line = line.strip()
-        if not line:
-            continue
-        
-        # 检查是否是星期行
-        day_match = re.match(r"^(周[一二三四五六日]|星期[一二三四五六日])[：:]?$", line)
-        if day_match:
-            day_str = day_match.group(1)
-            current_day = DAY_MAP.get(day_str)
-            continue
-        
-        # 解析课程行
-        if current_day is not None:
-            course = parse_course_line(line)
-            if course:
-                course["day"] = current_day
-                courses.append(course)
-            else:
-                errors.append(f"第{line_num}行无法解析: {line}")
-    
-    return courses, errors
+支持格式：
+• 早读/第1-8节/晚自习 + 课程名
+• (老师) 表示老师
+• @地点 表示上课地点
 
-
-def parse_course_line(line: str) -> dict:
-    """解析单行课程信息"""
-    # 匹配模式: 节次 课程名 (老师) @地点
-    # 或: 节次 课程名
-    
-    # 提取节次
-    period_pattern = r"^(早读|早自习|第?\d+节|晚自习|晚修)[：:\s]*"
-    period_match = re.match(period_pattern, line)
-    
-    if not period_match:
-        return None
-    
-    period_str = period_match.group(1)
-    period_num = PERIOD_MAP.get(period_str, 0)
-    
-    # 剩余部分
-    remaining = line[period_match.end():].strip()
-    if not remaining:
-        return None
-    
-    # 提取老师 (中文括号或英文括号)
-    teacher = ""
-    teacher_match = re.search(r"[（(]([^）)]+)[）)]", remaining)
-    if teacher_match:
-        teacher = teacher_match.group(1)
-        remaining = remaining[:teacher_match.start()] + remaining[teacher_match.end():]
-    
-    # 提取地点 (@或#开头)
-    location = ""
-    location_match = re.search(r"[@#](\S+)", remaining)
-    if location_match:
-        location = location_match.group(1)
-        remaining = remaining[:location_match.start()] + remaining[location_match.end():]
-    
-    # 课程名是剩余部分
-    name = remaining.strip()
-    
-    return {
-        "period": period_num,
-        "period_name": period_str,
-        "name": name,
-        "teacher": teacher,
-        "location": location,
-        "weeks": [],  # 空列表表示所有周
-    }
-
-
-def validate_schedule(courses: List[dict]) -> List[str]:
-    """验证课表，返回警告信息"""
-    warnings = []
-    
-    if not courses:
-        warnings.append("没有识别到任何课程")
-        return warnings
-    
-    # 检查重复课程
-    seen = set()
-    for course in courses:
-        key = (course.get("day"), course.get("period"))
-        if key in seen:
-            day_name = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][key[0]]
-            warnings.append(f"{day_name}第{key[1]}节有重复课程")
-        seen.add(key)
-    
-    # 检查是否有课程名
-    for course in courses:
-        if not course.get("name"):
-            warnings.append(f"第{course.get('day')+1}天第{course.get('period')}节缺少课程名")
-    
-    return warnings
-
-
-def format_schedule_for_review(courses: List[dict]) -> str:
-    """格式化课表供用户确认"""
-    lines = ["【课表预览】", ""]
-    
-    # 按星期分组
-    by_day = {i: [] for i in range(7)}
-    for course in courses:
-        day = course.get("day", 0)
-        by_day[day].append(course)
-    
-    day_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-    
-    for day_idx in range(7):
-        day_courses = by_day[day_idx]
-        if day_courses:
-            lines.append(f"\n{day_names[day_idx]}:")
-            day_courses.sort(key=lambda x: x.get("period", 0))
-            for c in day_courses:
-                period = c.get("period_name", f"第{c.get('period', '?')}节")
-                name = c.get("name", "未知")
-                teacher = c.get("teacher", "")
-                loc = c.get("location", "")
-                
-                parts = [f"  {period}: {name}"]
-                if teacher:
-                    parts.append(f"({teacher})")
-                if loc:
-                    parts.append(f"@{loc}")
-                lines.append(" ".join(parts))
-    
-    return "\n".join(lines)
+发送 /取消导入 退出导入模式
+"""

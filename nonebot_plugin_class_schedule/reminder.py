@@ -1,232 +1,261 @@
-"""提醒功能模块"""
+"""nonebot-plugin-class-schedule - 课前提醒模块"""
 
+import asyncio
 from datetime import datetime, timedelta
+from nonebot import get_bot, on_command
+from nonebot.adapters.onebot.v11 import Bot, MessageEvent, Message
 from nonebot.log import logger
-from nonebot.adapters.onebot.v11 import Bot
-
-try:
-    from nonebot_plugin_apscheduler import scheduler
-    HAS_SCHEDULER = True
-except ImportError:
-    HAS_SCHEDULER = False
-    scheduler = None
+from nonebot_plugin_apscheduler import scheduler
 
 from .manager import ScheduleManager
-from .utils import get_current_period, parse_time_string
-from .holidays import is_holiday
+from .utils import get_current_period, calculate_week_info, format_periods
+from . import manager as _manager
 
-# 初始化管理器
-manager = ScheduleManager()
+# ===== 提醒偏好存储 =====
 
-# 已注册的提醒任务
-_reminder_jobs = {}
+def get_reminder(user_id: str) -> bool:
+    """获取用户提醒开关状态。"""
+    prefs = _manager._prefs_cache.get(user_id, {})
+    return prefs.get("reminder", False)
 
+def get_reminder_users() -> list:
+    """获取所有开启提醒的用户ID列表。"""
+    prefs = _manager._prefs_cache
+    return [uid for uid, data in prefs.items() if data.get("reminder", False)]
 
-def init_reminder_scheduler():
-    """初始化提醒调度器"""
-    if not HAS_SCHEDULER:
-        logger.warning("未安装 nonebot_plugin_apscheduler，提醒功能不可用")
+def set_reminder(user_id: str, enabled: bool):
+    """设置用户提醒开关。"""
+    if user_id not in _manager._prefs_cache:
+        _manager._prefs_cache[user_id] = {}
+    _manager._prefs_cache[user_id]["reminder"] = enabled
+    _manager._save_preferences()
+
+def get_reminder_minutes(user_id: str) -> int:
+    """获取用户提醒提前分钟数，默认5。"""
+    prefs = _manager._prefs_cache.get(user_id, {})
+    return prefs.get("reminder_minutes", 5)
+
+def set_reminder_minutes(user_id: str, minutes: int):
+    """设置用户提醒提前分钟数。"""
+    if user_id not in _manager._prefs_cache:
+        _manager._prefs_cache[user_id] = {}
+    _manager._prefs_cache[user_id]["reminder_minutes"] = minutes
+    _manager._save_preferences()
+
+# ===== 假期订阅功能 =====
+
+def get_holiday_reminder(user_id: str) -> bool:
+    """获取用户假期提醒开关状态。"""
+    prefs = _manager._prefs_cache.get(user_id, {})
+    return prefs.get("holiday_reminder", False)
+
+def set_holiday_reminder(user_id: str, enabled: bool):
+    """设置用户假期提醒开关。"""
+    if user_id not in _manager._prefs_cache:
+        _manager._prefs_cache[user_id] = {}
+    _manager._prefs_cache[user_id]["holiday_reminder"] = enabled
+    _manager._save_preferences()
+
+# 记录已发送的假期提醒，避免重复 {user_id: {holiday_date_str: True}}
+_holiday_reminded: dict = {}
+
+async def check_and_remind_holiday():
+    """检查假期，提前5天每天提醒订阅用户。"""
+    users = [
+        uid for uid, data in _manager._prefs_cache.items()
+        if data.get("holiday_reminder", False)
+    ]
+    if not users:
         return
-    
-    # 每分钟检查一次
-    scheduler.add_job(
-        check_reminders,
-        "cron",
-        minute="*",
-        id="class_schedule_reminder",
-        replace_existing=True,
-    )
-    logger.info("课程表提醒调度器已启动")
 
+    from .holidays import ALL_HOLIDAYS, is_holiday
+    from datetime import date, timedelta
 
-async def check_reminders():
-    """检查并发送提醒"""
-    if not HAS_SCHEDULER:
+    today = date.today()
+
+    # 如果是普通周末（不是法定节假日），不发送提醒
+    if today.weekday() >= 5 and not is_holiday(today):
         return
-    
+
+    try:
+        bot = get_bot()
+    except ValueError:
+        return
+
+    for user_id in users:
+        try:
+            if user_id not in _holiday_reminded:
+                _holiday_reminded[user_id] = {}
+
+            # 遍历所有节假日，找5天内即将到来的
+            for holiday_date, name in ALL_HOLIDAYS.items():
+                days_left = (holiday_date - today).days
+
+                # 提前5天内，且今天还没提醒过
+                if 0 <= days_left <= 5:
+                    date_str = holiday_date.strftime("%Y-%m-%d")
+                    reminder_key = f"{date_str}_{name}"
+
+                    if reminder_key in _holiday_reminded[user_id]:
+                        continue
+
+                    # 发送提醒
+                    if days_left == 0:
+                        msg = f"假期提醒\n今天是{name}！\n好好享受假期吧~"
+                    else:
+                        msg = f"假期提醒\n距离{name}还有{days_left}天\n{holiday_date.strftime('%m月%d日')}开始放假"
+
+                    try:
+                        await bot.send_private_msg(
+                            user_id=int(user_id),
+                            message=Message(msg)
+                        )
+                        _holiday_reminded[user_id][reminder_key] = True
+                    except Exception as e:
+                        logger.warning(f"发送假期提醒失败 uid={user_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"假期提醒检查失败 uid={user_id}: {e}")
+
+# 每天早上8点检查假期提醒
+scheduler.add_job(
+    check_and_remind_holiday,
+    "cron",
+    hour=8,
+    minute=0,
+    id="class_schedule_holiday_reminder",
+    replace_existing=True,
+)
+
+# ===== 课前提醒任务 =====
+
+# 记录已提醒的节次，避免重复
+_reminded: dict = {}  # {user_id: {date_str: set(periods)}}
+
+def _clear_reminded_cache():
+    """每天0点清空提醒缓存。"""
+    _reminded.clear()
+
+# 注册每天0点清理
+scheduler.add_job(
+    _clear_reminded_cache,
+    "cron",
+    hour=0,
+    minute=0,
+    id="class_schedule_clear_cache",
+    replace_existing=True,
+)
+
+async def check_and_remind():
+    """检查所有开启提醒的用户，发送课前提醒。"""
+    users = get_reminder_users()
+    if not users:
+        return
+
     now = datetime.now()
-    
+    today = now.date()
+    date_str = today.strftime("%Y-%m-%d")
+    day_index = today.isoweekday()
+
+    if day_index >= 6:
+        return  # 周末不提醒
+
     # 检查是否是节假日
-    if is_holiday(now.date()):
+    from .holidays import is_holiday
+    if is_holiday(today):
         return
-    
-    # 获取所有用户
-    for user_id, prefs in manager._prefs_cache.items():
-        reminder_settings = prefs.get("reminder", {})
-        if not reminder_settings.get("enabled", False):
-            continue
-        
-        minutes_before = reminder_settings.get("minutes_before", 5)
-        
-        # 获取用户作息表
-        custom_schedule = prefs.get("custom_schedule")
-        if not custom_schedule:
-            continue
-        
-        # 检查是否有即将开始的课程
-        await check_user_reminder(user_id, custom_schedule, minutes_before, now)
 
-
-async def check_user_reminder(user_id: str, schedule: dict, minutes_before: int, now: datetime):
-    """检查单个用户的提醒
-    
-    Args:
-        user_id: 用户ID
-        schedule: 作息表
-        minutes_before: 提前提醒分钟数
-        now: 当前时间
-    """
-    current_time = now.strftime("%H:%M")
-    
-    # 遍历所有时间段
-    for period_name, times in schedule.items():
-        start_time = times.get("start", "")
-        if not start_time:
-            continue
-        
-        # 计算提醒时间
-        start_dt = datetime.strptime(start_time, "%H:%M")
-        reminder_dt = start_dt - timedelta(minutes=minutes_before)
-        reminder_time = reminder_dt.strftime("%H:%M")
-        
-        # 检查是否到达提醒时间 (当前时间 == 提醒时间)
-        if current_time == reminder_time:
-            # 检查该时间段是否有课
-            await send_reminder(user_id, period_name, start_time)
-
-
-async def send_reminder(user_id: str, period_name: str, start_time: str):
-    """发送提醒消息
-    
-    Args:
-        user_id: 用户ID
-        period_name: 节次名称
-        start_time: 开始时间
-    """
     try:
-        # 获取课程信息
-        from nonebot import get_bot
         bot = get_bot()
-        
-        # 获取今天的课程
-        weekday = datetime.now().weekday()
-        schedule = manager.get_schedule(user_id)
-        
-        if not schedule:
-            return
-        
-        courses = schedule.get("courses", [])
-        current_course = None
-        
-        for course in courses:
-            if course.get("day") == weekday and course.get("period_name") == period_name:
-                current_course = course
-                break
-        
-        if not current_course:
-            return
-        
-        # 构建提醒消息
-        course_name = current_course.get("name", "未知课程")
-        teacher = current_course.get("teacher", "")
-        location = current_course.get("location", "")
-        
-        message_parts = [
-            "⏰ 课前提醒",
-            f"",
-            f"即将开始: {period_name}",
-            f"课程: {course_name}",
-        ]
-        
-        if teacher:
-            message_parts.append(f"老师: {teacher}")
-        if location:
-            message_parts.append(f"地点: {location}")
-        
-        message_parts.append(f"开始时间: {start_time}")
-        
-        message = "\n".join(message_parts)
-        
-        # 发送私聊消息
-        await bot.send_private_msg(user_id=int(user_id), message=message)
-        logger.info(f"已发送课前提醒给用户 {user_id}: {course_name}")
-        
-    except Exception as e:
-        logger.error(f"发送提醒失败 {user_id}: {e}")
+    except ValueError:
+        return  # 没有bot实例
 
+    for user_id in users:
+        try:
+            schedule = _manager.get_schedule(user_id)
+            if not schedule:
+                continue
 
-def register_user_reminder(user_id: str, enabled: bool = True, minutes_before: int = 5):
-    """注册用户提醒
-    
-    Args:
-        user_id: 用户ID
-        enabled: 是否启用
-        minutes_before: 提前提醒分钟数
-    """
-    manager.set_reminder_settings(user_id, enabled=enabled, minutes_before=minutes_before)
-    logger.info(f"用户 {user_id} 提醒设置已更新: enabled={enabled}, minutes_before={minutes_before}")
+            week_info = calculate_week_info(
+                schedule["semester_start"], today, schedule.get("total_weeks", 20)
+            )
 
+            courses = _manager.get_courses_for_day(user_id, day_index, week_info["current"])
+            if not courses:
+                continue
 
-def unregister_user_reminder(user_id: str):
-    """注销用户提醒
-    
-    Args:
-        user_id: 用户ID
-    """
-    manager.set_reminder_settings(user_id, enabled=False)
-    logger.info(f"用户 {user_id} 提醒已禁用")
+            # 初始化当日提醒记录
+            if user_id not in _reminded:
+                _reminded[user_id] = {}
+            if date_str not in _reminded[user_id]:
+                _reminded[user_id][date_str] = set()
 
+            reminded_periods = _reminded[user_id][date_str]
+            reminder_minutes = get_reminder_minutes(user_id)
 
-# 假期提醒相关
-async def check_holiday_reminders():
-    """检查假期提醒"""
-    if not HAS_SCHEDULER:
-        return
-    
-    from .holidays import get_next_holiday
-    
-    now = datetime.now()
-    
-    # 获取所有用户
-    for user_id, prefs in manager._prefs_cache.items():
-        if not prefs.get("holiday_reminder", False):
-            continue
-        
-        # 获取下一个假期
-        next_holiday = get_next_holiday(now.date())
-        if not next_holiday:
-            continue
-        
-        holiday_date, name, days_left = next_holiday
-        
-        # 提前5天每天提醒
-        if 1 <= days_left <= 5:
-            # 只在早上8点提醒
-            if now.strftime("%H:%M") == "08:00":
-                await send_holiday_reminder(user_id, name, days_left)
+            # 遍历每门课，检查是否需要提醒
+            for course in courses:
+                periods = course.get("periods", [])
+                for p in periods:
+                    if p in reminded_periods:
+                        continue
 
+                    # 获取该节次开始时间
+                    from .utils import DEFAULT_SCHEDULE
+                    start_time = None
+                    for period, start, end in DEFAULT_SCHEDULE:
+                        if period == p:
+                            start_time = start
+                            break
 
-async def send_holiday_reminder(user_id: str, holiday_name: str, days_left: int):
-    """发送假期提醒
-    
-    Args:
-        user_id: 用户ID
-        holiday_name: 假期名称
-        days_left: 距离天数
-    """
-    try:
-        from nonebot import get_bot
-        bot = get_bot()
-        
-        message = f"🎉 假期提醒\n\n距离{holiday_name}还有 {days_left} 天！"
-        
-        await bot.send_private_msg(user_id=int(user_id), message=message)
-        logger.info(f"已发送假期提醒给用户 {user_id}: {holiday_name}")
-        
-    except Exception as e:
-        logger.error(f"发送假期提醒失败 {user_id}: {e}")
+                    if not start_time:
+                        continue
 
+                    # 计算提醒时间
+                    start_dt = datetime.strptime(start_time, "%H:%M")
+                    remind_dt = start_dt - timedelta(minutes=reminder_minutes)
 
-# 初始化
-if HAS_SCHEDULER:
-    init_reminder_scheduler()
+                    # 当前时间在提醒窗口内（前后1分钟）
+                    current_minutes = now.hour * 60 + now.minute
+                    target_minutes = remind_dt.hour * 60 + remind_dt.minute
+
+                    if abs(current_minutes - target_minutes) <= 1:
+                        # 发送提醒
+                        name = course.get("name", "未知")
+                        teacher = course.get("teacher", "")
+                        location = course.get("location", "")
+
+                        if p == 0:
+                            period_label = "早读"
+                        elif p == 9:
+                            period_label = "晚自习"
+                        else:
+                            period_label = f"第{p}节"
+
+                        msg = f"上课提醒\n{period_label} 还有{reminder_minutes}分钟开始\n课程: {name}"
+                        if teacher:
+                            msg += f"\n老师: {teacher}"
+                        if location:
+                            msg += f"\n地点: {location}"
+
+                        try:
+                            await bot.send_private_msg(
+                                user_id=int(user_id),
+                                message=Message(msg)
+                            )
+                        except Exception as e:
+                            logger.warning(f"发送提醒失败 uid={user_id}: {e}")
+
+                        reminded_periods.add(p)
+
+        except Exception as e:
+            logger.error(f"提醒检查失败 uid={user_id}: {e}")
+
+# 每分钟检查一次
+scheduler.add_job(
+    check_and_remind,
+    "interval",
+    minutes=1,
+    id="class_schedule_reminder",
+    replace_existing=True,
+)
