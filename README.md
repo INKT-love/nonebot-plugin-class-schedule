@@ -13,7 +13,13 @@
 
 ## 安装
 
-基础安装：
+推荐使用 NB-CLI 安装：
+
+```bash
+nb plugin install nonebot-plugin-class-schedule
+```
+
+也可以使用 pip 安装基础版：
 
 ```bash
 pip install nonebot-plugin-class-schedule
@@ -39,17 +45,19 @@ pip install "nonebot-plugin-class-schedule[all]"
 
 ## 加载插件
 
-在 NoneBot 项目中加载：
+如果使用 NB-CLI 安装，通常会自动写入项目配置。
 
-```python
-nonebot.load_plugin("nonebot_plugin_class_schedule")
-```
-
-或在 `pyproject.toml` 中配置：
+手动安装时，推荐在 `pyproject.toml` 中配置：
 
 ```toml
 [tool.nonebot]
 plugins = ["nonebot_plugin_class_schedule"]
+```
+
+也可以在自定义入口中手动加载：
+
+```python
+nonebot.load_plugin("nonebot_plugin_class_schedule")
 ```
 
 ## 数据存储
@@ -68,6 +76,12 @@ CLASS_SCHEDULE_DATA_DIR=/path/to/class_schedule_data
 - `preferences.json`：输出风格、提醒设置、作息表等用户偏好
 
 请不要把这些运行数据提交到 GitHub 或上传到 PyPI。
+
+## 配置项
+
+| 配置名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `CLASS_SCHEDULE_DATA_DIR` | `str | Path | None` | `None` | 自定义课程表数据目录；不填时使用 `nonebot-plugin-localstore`。 |
 
 ## 常用命令
 

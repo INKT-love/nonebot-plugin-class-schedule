@@ -12,6 +12,8 @@ from nonebot.plugin import PluginMetadata
 from datetime import date, timedelta
 from importlib.util import find_spec
 
+from .config import Config
+
 try:
     if find_spec("nonebot_plugin_htmlrender") is not None:
         require("nonebot_plugin_htmlrender")
@@ -66,10 +68,11 @@ __plugin_meta__ = PluginMetadata(
     usage="发送 /课程表帮助 查看帮助",
     type="application",
     homepage="https://github.com/INKT-love/nonebot-plugin-class-schedule",
+    config=Config,
     supported_adapters={"~onebot.v11"},
     extra={
         "author": "INKT-love",
-        "version": "1.0.3",
+        "version": "1.0.4",
     },
 )
 
