@@ -38,7 +38,6 @@ pip install nonebot-plugin-class-schedule
 在 `.env` 文件中添加：
 
 ```env
-# 可选：数据存储路径
 CLASS_SCHEDULE_DATA_DIR=./data/class_schedule
 ```
 
