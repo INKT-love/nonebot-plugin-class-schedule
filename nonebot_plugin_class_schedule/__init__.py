@@ -69,7 +69,7 @@ __plugin_meta__ = PluginMetadata(
     supported_adapters={"~onebot.v11"},
     extra={
         "author": "INKT-love",
-        "version": "1.0.2",
+        "version": "1.0.3",
     },
 )
 

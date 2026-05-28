@@ -64,7 +64,7 @@ CLASS_SCHEDULE_DATA_DIR=/path/to/class_schedule_data
 
 数据文件包括：
 
-- `schedules/<qq_user_id>.json`：用户课程表
+- `schedules/{qq_user_id}.json`：用户课程表
 - `preferences.json`：输出风格、提醒设置、作息表等用户偏好
 
 请不要把这些运行数据提交到 GitHub 或上传到 PyPI。
