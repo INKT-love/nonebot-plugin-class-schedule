@@ -3,19 +3,23 @@
 一个功能完善的 NoneBot2 课程表插件
 """
 
-from nonebot import on_command, on_startswith
+from nonebot import on_command, on_startswith, require
 from nonebot.adapters.onebot.v11 import Bot, MessageEvent, Message, MessageSegment
 from nonebot.log import logger
 from nonebot.params import CommandArg
 from nonebot.exception import FinishedException
 from nonebot.plugin import PluginMetadata
 from datetime import date, timedelta
-from typing import Tuple, List, Dict, Optional
+from importlib.util import find_spec
 
 try:
-    from nonebot_plugin_htmlrender import html_to_pic
-    HAS_HTMLRENDER = True
-except ImportError:
+    if find_spec("nonebot_plugin_htmlrender") is not None:
+        require("nonebot_plugin_htmlrender")
+        from nonebot_plugin_htmlrender import html_to_pic
+        HAS_HTMLRENDER = True
+    else:
+        HAS_HTMLRENDER = False
+except Exception:
     HAS_HTMLRENDER = False
 
 from .manager import ScheduleManager
@@ -63,6 +67,10 @@ __plugin_meta__ = PluginMetadata(
     type="application",
     homepage="https://github.com/INKT-love/nonebot-plugin-class-schedule",
     supported_adapters={"~onebot.v11"},
+    extra={
+        "author": "INKT-love",
+        "version": "1.0.2",
+    },
 )
 
 # 初始化管理器
@@ -523,6 +531,9 @@ async def handle_style(bot: Bot, event: MessageEvent, args: Message = CommandArg
             manager.set_user_style(user_id, "text")
             await bot.send(event, "已切换为文字输出模式")
         elif arg in ("图片", "image"):
+            if not HAS_HTMLRENDER:
+                await bot.send(event, "图片输出依赖 nonebot-plugin-htmlrender，请安装后再切换。")
+                return
             manager.set_user_style(user_id, "image")
             await bot.send(event, "已切换为图片输出模式")
         else:
@@ -1097,5 +1108,13 @@ async def _handle_weekday(bot: Bot, event: MessageEvent, day_index: int):
         await bot.send(event, f"查询失败: {e}")
 
 
-# 导入提醒模块
-from . import reminder
+try:
+    if find_spec("nonebot_plugin_apscheduler") is not None:
+        require("nonebot_plugin_apscheduler")
+        from . import reminder  # noqa: F401
+    else:
+        reminder = None
+        logger.warning("课前提醒定时任务未启用，请安装 nonebot-plugin-apscheduler。")
+except Exception as exc:
+    reminder = None
+    logger.warning(f"课前提醒定时任务未启用，请安装 nonebot-plugin-apscheduler: {exc}")

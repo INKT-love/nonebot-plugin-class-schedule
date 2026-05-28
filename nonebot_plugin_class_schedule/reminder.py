@@ -2,13 +2,12 @@
 
 import asyncio
 from datetime import datetime, timedelta
-from nonebot import get_bot, on_command
-from nonebot.adapters.onebot.v11 import Bot, MessageEvent, Message
+from nonebot import get_bot
+from nonebot.adapters.onebot.v11 import Message
 from nonebot.log import logger
 from nonebot_plugin_apscheduler import scheduler
 
-from .manager import ScheduleManager
-from .utils import get_current_period, calculate_week_info, format_periods
+from .utils import calculate_week_info
 from . import manager as _manager
 
 # ===== 提醒偏好存储 =====

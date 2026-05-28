@@ -1,27 +1,51 @@
-"""课表数据管理模块"""
+"""课表数据管理模块."""
 
 import json
-import os
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+
 from nonebot.log import logger
 
-# 尝试导入配置
 try:
     from nonebot import get_driver
-    _driver = get_driver()
-    _config = _driver.config
-    _data_dir = getattr(_config, "class_schedule_data_dir", "./data/class_schedule")
 except Exception:
-    _data_dir = "./data/class_schedule"
+    get_driver = None
+
+try:
+    from nonebot import require
+
+    require("nonebot_plugin_localstore")
+    import nonebot_plugin_localstore as localstore
+except Exception:
+    localstore = None
+
+
+def _resolve_data_dir() -> Path:
+    """Resolve the data directory without storing user data inside the package."""
+    if get_driver is not None:
+        try:
+            config = get_driver().config
+            configured = getattr(config, "class_schedule_data_dir", None)
+            if configured:
+                return Path(str(configured)).expanduser()
+        except Exception:
+            pass
+
+    if localstore is not None:
+        try:
+            return localstore.get_data_dir("nonebot_plugin_class_schedule")
+        except Exception:
+            pass
+
+    return Path.cwd() / "data" / "class_schedule"
 
 
 class ScheduleManager:
     """管理用户课表数据和偏好设置"""
     
     def __init__(self):
-        self.data_dir = Path(_data_dir)
+        self.data_dir = _resolve_data_dir()
         self.schedule_dir = self.data_dir / "schedules"
         self.prefs_file = self.data_dir / "preferences.json"
         
