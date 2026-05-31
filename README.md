@@ -62,13 +62,7 @@ nonebot.load_plugin("nonebot_plugin_class_schedule")
 
 ## 数据存储
 
-插件默认使用 `nonebot-plugin-localstore` 保存用户数据，不会把课程表写入插件安装目录。
-
-你也可以在 `.env` 中指定数据目录：
-
-```env
-CLASS_SCHEDULE_DATA_DIR=/path/to/class_schedule_data
-```
+插件使用 `nonebot-plugin-localstore` 保存用户数据，不会把课程表写入插件安装目录。
 
 数据文件包括：
 
@@ -77,9 +71,7 @@ CLASS_SCHEDULE_DATA_DIR=/path/to/class_schedule_data
 
 ## 配置项
 
-| 配置名 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `CLASS_SCHEDULE_DATA_DIR` | `str | Path | None` | `None` | 自定义课程表数据目录；不填时使用 `nonebot-plugin-localstore`。 |
+无需额外配置。
 
 ## 常用命令
 

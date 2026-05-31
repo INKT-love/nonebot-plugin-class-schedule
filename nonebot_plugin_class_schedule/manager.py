@@ -5,40 +5,16 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+from nonebot import require
 from nonebot.log import logger
 
-try:
-    from nonebot import get_driver
-except Exception:
-    get_driver = None
-
-try:
-    from nonebot import require
-
-    require("nonebot_plugin_localstore")
-    import nonebot_plugin_localstore as localstore
-except Exception:
-    localstore = None
+require("nonebot_plugin_localstore")
+import nonebot_plugin_localstore as localstore
 
 
 def _resolve_data_dir() -> Path:
-    """Resolve the data directory without storing user data inside the package."""
-    if get_driver is not None:
-        try:
-            config = get_driver().config
-            configured = getattr(config, "class_schedule_data_dir", None)
-            if configured:
-                return Path(str(configured)).expanduser()
-        except Exception:
-            pass
-
-    if localstore is not None:
-        try:
-            return localstore.get_data_dir("nonebot_plugin_class_schedule")
-        except Exception:
-            pass
-
-    return Path.cwd() / "data" / "class_schedule"
+    """Resolve the data directory managed by nonebot-plugin-localstore."""
+    return localstore.get_plugin_data_dir()
 
 
 class ScheduleManager:

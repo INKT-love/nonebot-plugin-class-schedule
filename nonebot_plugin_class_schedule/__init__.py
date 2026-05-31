@@ -3,7 +3,7 @@
 一个功能完善的 NoneBot2 课程表插件
 """
 
-from nonebot import on_command, on_startswith, require
+from nonebot import get_plugin_config, on_command, on_startswith, require
 from nonebot.adapters.onebot.v11 import Bot, MessageEvent, Message, MessageSegment
 from nonebot.log import logger
 from nonebot.params import CommandArg
@@ -13,6 +13,8 @@ from datetime import date, timedelta
 from importlib.util import find_spec
 
 from .config import Config
+
+plugin_config = get_plugin_config(Config)
 
 try:
     if find_spec("nonebot_plugin_htmlrender") is not None:
@@ -72,7 +74,7 @@ __plugin_meta__ = PluginMetadata(
     supported_adapters={"~onebot.v11"},
     extra={
         "author": "INKT-love",
-        "version": "1.0.5",
+        "version": "1.0.6",
     },
 )
 
